@@ -1,0 +1,9 @@
+data/raw/
+*.edf
+.venv/
+__pycache__/
+*.pyc
+_apoyo/
+.vscode/
+.ruff_cache/
+docs/uml_clases.mmd
