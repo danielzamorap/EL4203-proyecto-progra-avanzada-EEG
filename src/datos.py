@@ -25,9 +25,13 @@ class Dataset:
     """
 
     def __init__(self):
-        """Inicializa características y etiquetas. Crea el Dataset vacío."""
+        """Inicializa características, etiquetas y el origen de cada
+        ventana. Crea el Dataset vacío.
+        """
         self.__caracteristicas = []
         self.__etiquetas = []
+        self.__registros = []
+        self.__segundos = []
 
     def agregar_registro(self, ruta: Path, crisis: list) -> int:
         """Procesa las ventanas de un .edf crudo y devuelve cuántas agregó."""
@@ -43,7 +47,8 @@ class Dataset:
             print(f"ERROR: Se espera frecuencia de {FRECUENCIA} Hz.")
             return 0
 
-        # Se valida que los intervalos de crisis sean coherentes.
+        # Se valida que los intervalos de crisis sean coherentes, es decir,
+        # que estén dentro del registro y que el inicio ocurra antes del fin.
         duracion = crudo.n_times / FRECUENCIA
         for inicio, fin in crisis:
             if inicio < 0 or fin <= inicio or fin > duracion:
@@ -52,6 +57,7 @@ class Dataset:
 
         # Carga y lee la matriz real, únicamente con los 23 canales de EEG.
         senal = crudo.get_data(units="uV")[:N_CANALES, :]
+        nombre = Path(ruta).name
         muestras = int(VENTANA_S * FRECUENCIA)
         n_ventanas = crudo.n_times // muestras
         for i in range(n_ventanas):
@@ -72,6 +78,9 @@ class Dataset:
 
             self.__caracteristicas.append(fila)
             self.__etiquetas.append(etiqueta)
+            # Guarda el registro y segundo en que empieza la ventana.
+            self.__registros.append(nombre)
+            self.__segundos.append(inicio_ventana)
         return n_ventanas
 
     def obtener_caracteristicas(self) -> np.ndarray:
@@ -86,19 +95,28 @@ class Dataset:
         """Devuelve un vector nuevo con las etiquetas (0 normal, 1 crisis)."""
         return np.array(self.__etiquetas)
 
+    def obtener_origen(self, ventana: int) -> tuple:
+        """Indica el registro y el segundo donde empieza una ventana."""
+        if ventana < 0 or ventana >= len(self.__registros):
+            print("ERROR: La ventana no existe.")
+            return None
+        return str(self.__registros[ventana]), int(self.__segundos[ventana])
+
     def guardar(self, ruta: Path) -> None:
-        """Guarda características y etiquetas en un archivo .npz."""
+        """Guarda características, etiquetas y origen en un archivo .npz."""
         # Se escoge float32 sobre float64 porque ocupa la mitad de memoria y
         # su resolución es suficiente para la potencia usada.
         np.savez_compressed(
             ruta,
             caracteristicas=np.array(self.__caracteristicas, dtype=np.float32),
             etiquetas=np.array(self.__etiquetas),
+            registros=np.array(self.__registros),
+            segundos=np.array(self.__segundos),
         )
 
     def cargar(self, ruta: Path) -> int:
-        """Reemplaza los datos con los del dataset preprocesado .npz y
-        retorna cuántas ventanas hay.
+        """Agrega los datos del dataset preprocesado .npz a los que ya tiene
+        y retorna cuántas ventanas hay en total.
         """
 
         # Verifica que el archivo exista en la ruta.
@@ -106,34 +124,57 @@ class Dataset:
             print(f"ERROR: No existe el archivo {ruta}.")
             return 0
 
-        # Abre el archivo .npz y lee su contenido.
+        # Abre el archivo .npz y obtiene los nombres de sus matrices.
         datos = np.load(ruta)
         claves = datos.files
 
         # Comprueba que el archivo contenga las matrices que fueron guardadas
         # previamente.
-        if "caracteristicas" not in claves or "etiquetas" not in claves:
+        if (
+            "caracteristicas" not in claves
+            or "etiquetas" not in claves
+            or "registros" not in claves
+            or "segundos" not in claves
+        ):
             datos.close()
             print("ERROR: El archivo no tiene el formato esperado.")
             return 0
 
-        # Saca las matrices a la RAM.
+        # Copia las matrices a la RAM y cierra el archivo.
         caracteristicas = datos["caracteristicas"]
         etiquetas = datos["etiquetas"]
+        registros = datos["registros"]
+        segundos = datos["segundos"]
         datos.close()
 
-        # Se valida formato de matriz (ventanas x canales) y etiqueta por
-        # ventana uno a uno.
+        # Se valida el formato de la matriz (ventanas x canales) y que cada
+        # ventana tenga su etiqueta y su origen.
         if (
             len(caracteristicas.shape) != 2
             or caracteristicas.shape[1] != N_CANALES
             or len(caracteristicas) != len(etiquetas)
+            or len(registros) != len(etiquetas)
+            or len(segundos) != len(etiquetas)
         ):
             print("ERROR: El archivo no tiene el formato esperado.")
             return 0
 
-        # Convierte matrices y vectores a listas para poder agregar más
-        # registros y se retorna el total de ventanas cargadas.
-        self.__caracteristicas = list(caracteristicas)
-        self.__etiquetas = list(etiquetas)
+        # Convierte matrices y vectores a listas y las agrega a las que ya
+        # tiene, para poder juntar varios pacientes. Se retorna el total de
+        # ventanas.
+        self.__caracteristicas = self.__caracteristicas + list(caracteristicas)
+        self.__etiquetas = self.__etiquetas + list(etiquetas)
+        self.__registros = self.__registros + list(registros)
+        self.__segundos = self.__segundos + list(segundos)
         return len(self.__etiquetas)
+
+
+def cargar_pacientes(carpeta: Path, pacientes: list) -> Dataset:
+    """Junta en un solo Dataset las ventanas guardadas de varios pacientes
+    (carpeta/chbXX.npz). Devuelve None si alguno no se pudo cargar.
+    """
+    dataset = Dataset()
+    for paciente in pacientes:
+        if dataset.cargar(Path(carpeta) / f"{paciente}.npz") == 0:
+            return None
+    return dataset
