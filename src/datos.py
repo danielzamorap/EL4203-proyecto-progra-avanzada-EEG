@@ -3,10 +3,16 @@ registros .edf. Se procesan ventanas EEG con sus características y
 etiquetas.
 """
 
+import warnings
 from pathlib import Path
 
 import mne
 import numpy as np
+
+# El montaje de CHB-MIT repite el canal T8-P8. Al leer cada registro, MNE
+# lo renombra como T8-P8-0 y T8-P8-1 y muestra un aviso, el cual se ignora
+# con warnings.
+warnings.filterwarnings("ignore", message="Channel names are not unique")
 
 N_CANALES = 23
 FRECUENCIA = 256.0
@@ -27,10 +33,11 @@ class Dataset:
         """Procesa las ventanas de un .edf crudo y devuelve cuántas agregó."""
         crudo = mne.io.read_raw_edf(ruta, preload=False, verbose=False)
 
-        # Se pide el mismo montaje (cantidad de canales y frecuencia) que el
-        # dataset.
-        if len(crudo.ch_names) != N_CANALES:
-            print(f"ERROR: Se esperan {N_CANALES} canales.")
+        # Se exigen al menos los 23 canales de EEG y la frecuencia del
+        # dataset. Algunos registros traen un canal extra al final (ECG o
+        # VNS), que se descarta al leer la señal.
+        if len(crudo.ch_names) < N_CANALES:
+            print(f"ERROR: Se esperan al menos {N_CANALES} canales.")
             return 0
         if crudo.info["sfreq"] != FRECUENCIA:
             print(f"ERROR: Se espera frecuencia de {FRECUENCIA} Hz.")
@@ -43,8 +50,8 @@ class Dataset:
                 print("ERROR: Hay un intervalo de crisis inválido.")
                 return 0
 
-        # Carga y lee la matriz real.
-        senal = crudo.get_data(units="uV")
+        # Carga y lee la matriz real, únicamente con los 23 canales de EEG.
+        senal = crudo.get_data(units="uV")[:N_CANALES, :]
         muestras = int(VENTANA_S * FRECUENCIA)
         n_ventanas = crudo.n_times // muestras
         for i in range(n_ventanas):
