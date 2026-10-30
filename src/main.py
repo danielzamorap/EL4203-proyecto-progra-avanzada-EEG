@@ -1,90 +1,64 @@
 """Módulo main: Script para validar el funcionamiento de las clases de
-análisis EEG. Construye un dataset de prueba usando una muestra de los
-registros y evalúa el modelo umbral.
+análisis EEG. Entrena el modelo umbral con 5 pacientes y lo evalúa con un
+paciente nuevo (no usado para entrenamiento).
 """
 
 from pathlib import Path
 
-from datos import Dataset
+from datos import cargar_pacientes
 from metricas import Metricas
 from modelos import ModeloUmbral
 
-BASE_DIR = Path.cwd()
-CARPETA_EDF = BASE_DIR / "data" / "raw" / "chb10"
-CARPETA_PROCESADA = BASE_DIR / "data" / "processed"
-GUARDADO = CARPETA_PROCESADA / "demo.npz"
-REGISTROS = [("chb10_01.edf", []), ("chb10_12.edf", [(6313, 6348)])]
-
-
-def armar_dataset() -> Dataset:
-    """Carga el dataset guardado o lo arma leyendo los .edf."""
-
-    # Inicializa un objeto Dataset vacío.
-    dataset = Dataset()
-
-    # Verifica si ya existe el dataset preprocesado para cargarlo directamente
-    # a la memoria.
-    if GUARDADO.exists() and dataset.cargar(GUARDADO) > 0:
-        print(
-            f"Ventanas cargadas desde {GUARDADO.name}:",
-            len(dataset.obtener_etiquetas()),
-        )
-        return dataset
-
-    # Itera sobre la lista de registros para procesar cada archivo .edf y
-    # extraer sus ventanas según las crisis anotadas.
-    for nombre, crisis in REGISTROS:
-        ruta = CARPETA_EDF / nombre
-        # Comprueba que el archivo crudo exista en la ruta indicada antes de
-        # comenzar a extraer características.
-        if ruta.exists():
-            n = dataset.agregar_registro(ruta, crisis)
-            print(f"{nombre}: {n} ventanas")
-        else:
-            print(f"No se encuentra {ruta}. Revisar la descarga.")
-
-    # Si se agregaron ventanas exitosamente al dataset, crea un directorio para
-    # guardar la matriz y el vector en formato .npz.
-    if len(dataset.obtener_etiquetas()) > 0:
-        CARPETA_PROCESADA.mkdir(exist_ok=True)
-        dataset.guardar(GUARDADO)
-    return dataset
+CARPETA_PROCESADA = Path.cwd() / "data" / "processed"
+PACIENTES = ["chb01", "chb03", "chb04", "chb05", "chb09", "chb10"]
+# Paciente que se deja fuera del entrenamiento para evaluar el modelo.
+PACIENTE_PRUEBA = "chb10"
 
 
 def main() -> None:
-    """Arma el dataset, entrena el modelo umbral y muestra sus métricas."""
+    """Entrena el modelo umbral y lo evalúa con un paciente no visto."""
 
-    # Prepara el dataset con la matriz de características (potencia media) y el
-    # vector de etiquetas.
-    dataset = armar_dataset()
+    # Separa los pacientes en 5 de entrenamiento y 1 de prueba.
+    pacientes_entrenamiento = []
+    for paciente in PACIENTES:
+        if paciente != PACIENTE_PRUEBA:
+            pacientes_entrenamiento.append(paciente)
+    entrenamiento = cargar_pacientes(
+        CARPETA_PROCESADA, pacientes_entrenamiento
+    )
+    prueba = cargar_pacientes(CARPETA_PROCESADA, [PACIENTE_PRUEBA])
 
-    # Comprueba que el dataset contenga ventanas procesadas antes de intentar
-    # el entrenamiento y evaluación.
-    if len(dataset.obtener_etiquetas()) == 0:
-        print("No hay datos para evaluar.")
+    # Comprueba que se hayan leído los .npz de todos los pacientes.
+    if entrenamiento is None or prueba is None:
+        print("No hay datos para entrenar o evaluar.")
         return
+    n_entrenamiento = len(entrenamiento.obtener_etiquetas())
+    n_prueba = len(prueba.obtener_etiquetas())
+    print(
+        f"Entrenamiento: {n_entrenamiento} ventanas de "
+        f"{len(pacientes_entrenamiento)} pacientes"
+    )
+    print(f"Prueba: {n_prueba} ventanas de {PACIENTE_PRUEBA} (no visto)")
 
-    # Inicializa el modelo baseline de umbral.
-    modelo = ModeloUmbral()
+    # Modelos a entrenar y evaluar, cada uno con su nombre. Actualmente solo
+    # ModeloUmbral. En una futura iteración se agregará ModeloRedNeuronal
+    # cuando esté implementado.
+    modelos = [("Modelo umbral", ModeloUmbral())]
 
-    # Entrena el modelo ajustando su umbral interno con los datos extraídos en
-    # el dataset.
-    if not modelo.entrenar(dataset):
-        return
-    print(f"Umbral aprendido: {modelo.obtener_umbral():.1f} uV^2")
+    print()
+    print("== Evaluación del modelo (requiere las crisis anotadas) ==")
+    for nombre, modelo in modelos:
+        if not modelo.entrenar(entrenamiento):
+            return
 
-    # Inicializa un objeto de la clase Metricas para comparar las predicciones
-    # del modelo entrenado contra las etiquetas reales.
-    metricas = Metricas(modelo, dataset)
-
-    # Calcula e imprime la matriz de confusión.
-    print("Matriz de confusión [[VN, FP], [FN, VP]]:")
-    print(metricas.matriz_confusion())
-
-    # Crea e imprime un resumen con las métricas de desempeño.
-    for nombre, valor in metricas.resumen().items():
-        print(f"{nombre}: {valor:.3f}")
-    print("Nota: Se entrena y evalúa con los mismos datos.")
+        # Inicializa un objeto de la clase Metricas para comparar las
+        # predicciones del modelo entrenado contra las etiquetas reales.
+        metricas = Metricas(modelo, prueba)
+        print(nombre)
+        print("Matriz de confusión [[VN, FP], [FN, VP]]:")
+        print(metricas.matriz_confusion())
+        for metrica, valor in metricas.resumen().items():
+            print(f"{metrica}: {valor:.3f}")
 
 
 main()
