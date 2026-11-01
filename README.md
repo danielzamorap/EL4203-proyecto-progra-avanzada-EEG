@@ -25,4 +25,4 @@ python -m pip install -r requirements.txt
 python src/main.py
 ```
 
-El código usa `data/processed/demo.npz`, no es necesario descargar el dataset de CHB-MIT para ejecutarlo.
+El código usa como dataset los archivos `.npz` desde `data/processed/`, generados a partir de los registros `.edf` y los archivos `summary` de 6 pacientes del dataset clínico CHB-MIT. Dado que los `.npz` guardan la potencia por canal y la etiqueta de cada ventana, no es necesario descargar el dataset original para ejecutar el código.
