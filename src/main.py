@@ -1,6 +1,8 @@
 """Módulo main: Script para validar el funcionamiento de las clases de
 análisis EEG. Entrena el modelo umbral con 5 pacientes y lo evalúa con un
 paciente nuevo (no usado para entrenamiento).
+
+Muestra las 10 ventanas con mayor puntaje de crisis de ese paciente.
 """
 
 from pathlib import Path
@@ -16,7 +18,9 @@ PACIENTE_PRUEBA = "chb10"
 
 
 def main() -> None:
-    """Entrena el modelo umbral y lo evalúa con un paciente no visto."""
+    """Entrena el modelo umbral y lo evalúa con un paciente no visto.
+    Indica las ventanas de posible crisis de ese paciente.
+    """
 
     # Separa los pacientes en 5 de entrenamiento y 1 de prueba.
     pacientes_entrenamiento = []
@@ -59,6 +63,17 @@ def main() -> None:
         print(metricas.matriz_confusion())
         for metrica, valor in metricas.resumen().items():
             print(f"{metrica}: {valor:.3f}")
+
+    # Lista de revisión: Ventanas del paciente de prueba ordenadas de mayor a
+    # menor puntaje, según el último modelo de la lista.
+    modelo = modelos[-1][1]
+    orden = modelo.priorizar(prueba.obtener_caracteristicas())
+    print()
+    print("== Lista de revisión priorizada ==")
+    print("Ventanas de posible crisis (registro, segundo):")
+    for ventana in orden[:10]:
+        registro, segundo = prueba.obtener_origen(ventana)
+        print(f"  {registro}, segundo {segundo}")
 
 
 main()

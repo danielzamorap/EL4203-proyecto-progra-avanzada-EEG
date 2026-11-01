@@ -6,6 +6,7 @@ la clase Modelo.
 import numpy as np
 
 from datos import N_CANALES, Dataset
+from ordenamiento import merge_sort
 
 
 class Modelo:
@@ -42,14 +43,15 @@ class Modelo:
         return self.__entrenado
 
     def aprender(self, x: np.ndarray, y: np.ndarray) -> bool:
-        """Ajusta el modelo a los datos segun lo que se define en cada clase
-        hija.
+        """Ajusta el modelo a los datos según lo que define cada clase hija.
+
+        Retorna True si queda entrenado.
         """
         return False
 
     def calcular_puntaje(self, x: np.ndarray) -> np.ndarray:
-        """Devuelve un puntaje de crisis por segmento EEG definido en cada
-        hijo.
+        """Devuelve un puntaje de crisis por segmento EEG, definido en cada
+        clase hija.
         """
         return None
 
@@ -63,15 +65,8 @@ class Modelo:
         """Devuelve un vector de predicciones con 1 o 0 (crisis o normal)
         para cada ventana de entrada.
         """
-        # Verifica que el modelo haya sido entrenado previamente.
-        if not self.__entrenado:
-            print("ERROR: El modelo no ha sido entrenado.")
-            return None
-        x = np.array(x)
-
-        # Comprueba el formato de la matriz de entrada (ventanas x canales).
-        if len(x.shape) != 2 or x.shape[1] != N_CANALES:
-            print(f"ERROR: Se esperan {N_CANALES} valores por ventana.")
+        x = self.__validar_entrada(x)
+        if x is None:
             return None
 
         # Calcula los puntajes de crisis utilizando el método del modelo
@@ -85,6 +80,48 @@ class Modelo:
         prediccion = np.zeros(len(puntajes))
         prediccion[puntajes >= self.obtener_umbral()] = 1
         return prediccion
+
+    def priorizar(self, x: np.ndarray) -> list:
+        """Ordena los índices de las ventanas de mayor a menor puntaje, lo que
+        permite revisar primero las ventanas más probables de ser crisis.
+        """
+        x = self.__validar_entrada(x)
+        if x is None:
+            return None
+        puntajes = self.calcular_puntaje(x)
+        if puntajes is None:
+            return None
+
+        # Ordena los pares (puntaje, índice) usando Merge Sort. El índice
+        # permite saber a qué ventana corresponde cada puntaje ordenado.
+        pares = []
+        for i in range(len(puntajes)):
+            pares.append((puntajes[i], i))
+        pares = merge_sort(pares)
+
+        # Merge Sort deja los pares de menor a mayor, así que se recorren de
+        # atrás hacia adelante y se guarda solo el índice.
+        orden = []
+        for i in range(len(pares) - 1, -1, -1):
+            orden.append(pares[i][1])
+        return orden
+
+    def __validar_entrada(self, x: np.ndarray) -> np.ndarray:
+        """Comprueba que el modelo esté entrenado y que la entrada sea una
+        matriz de ventanas x canales. Devuelve la matriz o None si no es
+        válida.
+        """
+        # Verifica que el modelo haya sido entrenado previamente.
+        if not self.__entrenado:
+            print("ERROR: El modelo no ha sido entrenado.")
+            return None
+        x = np.array(x)
+
+        # Comprueba el formato de la matriz de entrada (ventanas x canales).
+        if len(x.shape) != 2 or x.shape[1] != N_CANALES:
+            print(f"ERROR: Se esperan {N_CANALES} valores por ventana.")
+            return None
+        return x
 
 
 class ModeloUmbral(Modelo):
@@ -102,7 +139,9 @@ class ModeloUmbral(Modelo):
         return self.__umbral
 
     def aprender(self, x: np.ndarray, y: np.ndarray) -> bool:
-        """Fija el umbral entre la potencia media ambas etiquetas."""
+        """Fija el umbral entre la potencia media de ventanas normales y de
+        crisis.
+        """
         # Calcula el puntaje (potencia media) de todas las ventanas de
         # entrenamiento.
         potencia = self.calcular_puntaje(x)
