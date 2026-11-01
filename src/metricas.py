@@ -1,9 +1,10 @@
-"""Modulo metricas: Presenta la clase Metricas, cuyo objetivo es evaluar el
+"""Módulo metricas: Presenta la clase Metricas, cuyo objetivo es evaluar el
 rendimiento de un modelo de aprendizaje automático vs los eventos de crisis
 anotados en el dataset.
 """
 
 import numpy as np
+from sklearn.metrics import roc_auc_score, roc_curve
 
 from datos import Dataset
 from modelos import Modelo
@@ -73,3 +74,43 @@ class Metricas:
             "precision": float(precision),
             "f1": float(f1),
         }
+
+    def auc(self) -> float:
+        """Calcula el AUC: La probabilidad de que una ventana de crisis tenga
+        mayor puntaje que una ventana normal.
+        """
+        y_real, puntajes = self.__etiquetas_y_puntajes()
+        if puntajes is None:
+            return None
+        return float(roc_auc_score(y_real, puntajes))
+
+    def curva_roc(self) -> list:
+        """Calcula la curva ROC [fpr, tpr]: La tasa de falsos positivos y la
+        de verdaderos positivos para cada umbral posible.
+        """
+        y_real, puntajes = self.__etiquetas_y_puntajes()
+        if puntajes is None:
+            return None
+        fpr, tpr, _ = roc_curve(y_real, puntajes)
+        return [fpr, tpr]
+
+    def __etiquetas_y_puntajes(self) -> tuple:
+        """Obtiene las etiquetas reales y los puntajes del modelo.
+
+        Los puntajes son None si el modelo no está entrenado, si no
+        se pueden calcular o si falta una de las dos clases.
+        """
+        y_real = self.__dataset.obtener_etiquetas()
+        if not self.__modelo.esta_entrenado():
+            print("ERROR: El modelo no ha sido entrenado.")
+            return y_real, None
+        x = self.__dataset.obtener_caracteristicas()
+        puntajes = self.__modelo.calcular_puntaje(x)
+        if (
+            puntajes is None
+            or np.sum(y_real == 1) == 0
+            or np.sum(y_real == 0) == 0
+        ):
+            print("ERROR: No se pueden evaluar los puntajes del modelo.")
+            return y_real, None
+        return y_real, puntajes

@@ -2,19 +2,42 @@
 análisis EEG. Entrena el modelo umbral con 5 pacientes y lo evalúa con un
 paciente nuevo (no usado para entrenamiento).
 
-Muestra las 10 ventanas con mayor puntaje de crisis de ese paciente.
+Muestra las 10 ventanas con mayor puntaje de crisis de ese paciente
+y la curva ROC del modelo.
 """
 
 from pathlib import Path
+
+import matplotlib.pyplot as plt
 
 from datos import cargar_pacientes
 from metricas import Metricas
 from modelos import ModeloUmbral
 
 CARPETA_PROCESADA = Path.cwd() / "data" / "processed"
+CARPETA_RESULTADOS = Path.cwd() / "resultados"
 PACIENTES = ["chb01", "chb03", "chb04", "chb05", "chb09", "chb10"]
 # Paciente que se deja fuera del entrenamiento para evaluar el modelo.
 PACIENTE_PRUEBA = "chb10"
+
+
+def graficar_roc(curvas: dict) -> None:
+    """Grafica la curva ROC de cada modelo en el paciente de prueba y la
+    guarda en resultados/.
+    """
+    plt.figure(figsize=(5, 5))
+    for nombre, curva in curvas.items():
+        # Cada curva es [fpr, tpr].
+        plt.plot(curva[0], curva[1], label=nombre)
+    plt.plot([0, 1], [0, 1], color="gray", linestyle="--")
+    plt.xlabel("False positive rate")
+    plt.ylabel("True positive rate")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    CARPETA_RESULTADOS.mkdir(exist_ok=True)
+    plt.savefig(CARPETA_RESULTADOS / "roc_prueba.png", dpi=300)
+    print("\nCurva ROC guardada en resultados/roc_prueba.png")
 
 
 def main() -> None:
@@ -51,6 +74,7 @@ def main() -> None:
 
     print()
     print("== Evaluación del modelo (requiere las crisis anotadas) ==")
+    curvas_roc = {}
     for nombre, modelo in modelos:
         if not modelo.entrenar(entrenamiento):
             return
@@ -64,6 +88,13 @@ def main() -> None:
         for metrica, valor in metricas.resumen().items():
             print(f"{metrica}: {valor:.3f}")
 
+        # AUC: Probabilidad de que una ventana de crisis tenga mayor puntaje
+        # que una normal, es decir, que aparezca antes en la lista de
+        # revisión.
+        auc = metricas.auc()
+        print(f"auc: {auc:.3f}")
+        curvas_roc[f"{nombre} (AUC = {auc:.3f})"] = metricas.curva_roc()
+
     # Lista de revisión: Ventanas del paciente de prueba ordenadas de mayor a
     # menor puntaje, según el último modelo de la lista.
     modelo = modelos[-1][1]
@@ -74,6 +105,10 @@ def main() -> None:
     for ventana in orden[:10]:
         registro, segundo = prueba.obtener_origen(ventana)
         print(f"  {registro}, segundo {segundo}")
+
+    # Curva ROC de cada modelo en el paciente de prueba.
+    graficar_roc(curvas_roc)
+    plt.show()
 
 
 main()
