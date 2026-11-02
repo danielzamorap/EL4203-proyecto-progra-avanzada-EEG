@@ -4,9 +4,23 @@ la clase Modelo.
 """
 
 import numpy as np
+import torch
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
 
 from datos import N_CANALES, Dataset
 from ordenamiento import merge_sort
+
+# Semilla fija para resultados reproducibles al entrenar la red neuronal.
+SEMILLA = 4203
+# Batch size para entrenamiento del MLP.
+TAMANO_LOTE = 1024
+
+# Especificidad mínima que define el umbral de decisión. Se usa 0.99 (o bien,
+# 1% de falsas alarmas) porque solo el 0.19% de las ventanas son crisis y un
+# valor más chico haría que las falsas alarmas superen en mayor medida a las
+# crisis reales anotadas en cada summary del dataset crudo.
+ESPECIFICIDAD_MINIMA = 0.99
 
 
 class Modelo:
@@ -170,16 +184,22 @@ class ModeloRedNeuronal(Modelo):
     """Modelo de Red neuronal que sigue una arquitectura MLP. Clasifica
     ventanas a partir de la potencia.
 
-    Se busca implementar con PyTorch y usar GPU si está disponible.
+    Se implementa con PyTorch y usa la GPU si está disponible.
     """
 
     def __init__(
-        self, capas: list | None = None, tasa: float = 1e-3, epocas: int = 50
+        self,
+        capas: list | None = None,
+        tasa: float = 1e-3,
+        epocas: int = 50,
+        validacion: Dataset | None = None,
     ):
         """Inicializa la red neuronal llamando a la clase base (super) y
-        estableciendo sus hiperparámetros.
+        estableciendo sus hiperparámetros. Si se entrega un dataset de
+        validación, al entrenar se mide validation loss en cada época.
         """
         super().__init__()
+        self.__validacion = validacion
 
         # Valores por defecto para los hiperparámetros.
         self.__capas = [25]
@@ -187,6 +207,13 @@ class ModeloRedNeuronal(Modelo):
         self.__epocas = 50
         if capas is None:
             capas = [25]
+
+        # Se definen al entrenar.
+        self.__red = None
+        self.__media = None
+        self.__desviacion = None
+        self.__umbral = 0.5
+        self.__perdidas = {"train": [], "validacion": []}
 
         # Valida y ajusta los hiperparámetros ingresados.
         self.ajustar_parametros(capas, tasa, epocas)
@@ -201,6 +228,21 @@ class ModeloRedNeuronal(Modelo):
             "tasa": self.__tasa,
             "epocas": self.__epocas,
         }
+
+    def obtener_perdidas(self) -> dict:
+        """Devuelve una copia de train y validation loss para cada época del
+        último entrenamiento.
+        """
+        return {
+            "train": self.__perdidas["train"].copy(),
+            "validacion": self.__perdidas["validacion"].copy(),
+        }
+
+    def obtener_umbral(self) -> float:
+        """Devuelve el umbral de decisión aprendido sobre la probabilidad
+        de crisis.
+        """
+        return self.__umbral
 
     def ajustar_parametros(
         self, capas: list, tasa: float, epocas: int
@@ -225,8 +267,133 @@ class ModeloRedNeuronal(Modelo):
         """Entrena los pesos de la red neuronal utilizando los datos
         ingresados y los hiperparámetros guardados.
         """
+        torch.manual_seed(SEMILLA)
+
+        # Guarda la media y desviación est. de cada canal en escala
+        # logarítmica para normalizar de igual manera las ventanas que
+        # se evalúen. Se suma 1e-8 a la desviación para no dividir por cero.
+        x_log = np.log1p(x)
+        self.__media = np.zeros(N_CANALES)
+        self.__desviacion = np.zeros(N_CANALES)
+        for canal in range(N_CANALES):
+            self.__media[canal] = np.mean(x_log[:, canal])
+            self.__desviacion[canal] = np.std(x_log[:, canal]) + 1e-8
+
+        entradas = torch.tensor(self.__normalizar(x), dtype=torch.float32)
+        etiquetas = torch.tensor(y, dtype=torch.float32)
+        lotes = DataLoader(
+            TensorDataset(entradas, etiquetas),
+            batch_size=TAMANO_LOTE,
+            shuffle=True,
+        )
+
+        # Al haber muy pocas crisis, el error en cada ventana de crisis se
+        # multiplica por 'normales / crisis', para que ambas clases pesen lo
+        # mismo en loss.
+        device = self.__device()
+        peso = torch.tensor([np.sum(y == 0) / np.sum(y == 1)])
+        perdida = nn.BCEWithLogitsLoss(pos_weight=peso.to(device))
+        red = self.__crear_red().to(device)
+        optimizador = torch.optim.Adam(red.parameters(), lr=self.__tasa)
+
+        self.__perdidas = {"train": [], "validacion": []}
+        red.train()
+        for epoca in range(self.__epocas):
+            # Guarda train loss promedio en la época, ponderando cada lote
+            # según su tamaño.
+            suma = 0.0
+            for lote_x, lote_y in lotes:
+                optimizador.zero_grad()
+                salida = red(lote_x.to(device)).squeeze(1)
+                error = perdida(salida, lote_y.to(device))
+                error.backward()
+                optimizador.step()
+                suma = suma + error.item() * len(lote_y)
+            self.__perdidas["train"].append(suma / len(y))
+            mensaje = (
+                f"Epoch {epoca + 1}/{self.__epocas} - "
+                f"Train loss: {suma / len(y):.4f}"
+            )
+
+            # Si hay datos de validación, mide y muestra validation loss.
+            if self.__validacion is not None:
+                perdida_val = self.__perdida_validacion(red, perdida)
+                self.__perdidas["validacion"].append(perdida_val)
+                mensaje = f"{mensaje} - Val loss: {perdida_val:.4f}"
+            print(mensaje)
+        self.__red = red
+
+        # El peso de las crisis hace que la RN sobreestime su probabilidad, y
+        # muchas ventanas normales superan 0.5. Por eso el umbral no es 0.5,
+        # sino el que fija ESPECIFICIDAD_MINIMA.
+        puntajes = self.calcular_puntaje(x)
+        self.__umbral = float(
+            np.percentile(puntajes[y == 0], 100 * ESPECIFICIDAD_MINIMA)
+        )
+        return True
 
     def calcular_puntaje(self, x: np.ndarray) -> np.ndarray:
-        """Devuelve la probabilidad (calculada por la red) de que una
-        ventana corresponda a una crisis (salida en el rango [0, 1])
+        """Devuelve la probabilidad de que cada ventana sea una crisis."""
+        if self.__red is None:
+            return None
+        device = self.__device()
+        entradas = torch.tensor(self.__normalizar(x), dtype=torch.float32)
+        # Se evalúa la red sin calcular gradientes. La sigmoide convierte su
+        # salida en una probabilidad.
+        self.__red.eval()
+        with torch.no_grad():
+            salida = self.__red(entradas.to(device)).squeeze(1)
+        return torch.sigmoid(salida).cpu().numpy()
+
+    def __perdida_validacion(
+        self, red: nn.Sequential, perdida: nn.BCEWithLogitsLoss
+    ) -> float:
+        """Calcula validation loss con la misma función de pérdida del
+        entrenamiento. No modifica los pesos.
         """
+        device = self.__device()
+        entradas = torch.tensor(
+            self.__normalizar(self.__validacion.obtener_caracteristicas()),
+            dtype=torch.float32,
+        )
+        etiquetas = torch.tensor(
+            self.__validacion.obtener_etiquetas(), dtype=torch.float32
+        )
+        red.eval()
+        with torch.no_grad():
+            salida = red(entradas.to(device)).squeeze(1)
+            valor = perdida(salida, etiquetas.to(device)).item()
+        # Vuelve al modo de entrenamiento para seguir con la siguiente época.
+        red.train()
+        return valor
+
+    def __crear_red(self) -> nn.Sequential:
+        """Arma el MLP apilando una capa lineal y una ReLU por cada valor de
+        capas, más una neurona de salida.
+        """
+        red = nn.Sequential()
+        entradas = N_CANALES
+        for neuronas in self.__capas:
+            red.append(nn.Linear(entradas, neuronas))
+            red.append(nn.ReLU())
+            entradas = neuronas
+        red.append(nn.Linear(entradas, 1))
+        return red
+
+    def __normalizar(self, x: np.ndarray) -> np.ndarray:
+        """Pasa la potencia a escala logarítmica y la estandariza por canal
+        con la media y la desviación del entrenamiento.
+        """
+        x_log = np.log1p(x)
+        normalizada = np.zeros(x_log.shape)
+        for canal in range(N_CANALES):
+            normalizada[:, canal] = (
+                x_log[:, canal] - self.__media[canal]
+            ) / self.__desviacion[canal]
+        return normalizada
+
+    def __device(self) -> str:
+        """Elige "cuda" si hay una GPU disponible, "cpu" si no."""
+        if torch.cuda.is_available():
+            return "cuda"
+        return "cpu"
