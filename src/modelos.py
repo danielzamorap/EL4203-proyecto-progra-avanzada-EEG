@@ -190,8 +190,8 @@ class ModeloRedNeuronal(Modelo):
     def __init__(
         self,
         capas: list | None = None,
-        tasa: float = 1e-3,
-        epocas: int = 50,
+        tasa: float = 1e-4,
+        epocas: int = 23,
         validacion: Dataset | None = None,
     ):
         """Inicializa la red neuronal llamando a la clase base (super) y
@@ -201,10 +201,10 @@ class ModeloRedNeuronal(Modelo):
         super().__init__()
         self.__validacion = validacion
 
-        # Valores por defecto para los hiperparámetros.
+        # Hiperparámetros elegidos desde notebooks/experimento_mlp.ipynb.
         self.__capas = [25]
-        self.__tasa = 1e-3
-        self.__epocas = 50
+        self.__tasa = 1e-4
+        self.__epocas = 23
         if capas is None:
             capas = [25]
 
