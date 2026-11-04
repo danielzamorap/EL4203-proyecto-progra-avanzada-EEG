@@ -7,3 +7,4 @@ _apoyo/
 .vscode/
 .ruff_cache/
 docs/uml_clases.mmd
+.ipynb_checkpoints/
