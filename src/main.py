@@ -1,9 +1,9 @@
 """Módulo main: Script para validar el funcionamiento de las clases de
-análisis EEG. Entrena el modelo umbral con 5 pacientes y lo evalúa con un
+análisis EEG. Entrena los modelos con 5 pacientes y los evalúa con un
 paciente nuevo (no usado para entrenamiento).
 
 Muestra las 10 ventanas con mayor puntaje de crisis de ese paciente
-y la curva ROC del modelo.
+y la curva ROC de ambos modelos.
 """
 
 from pathlib import Path
@@ -12,12 +12,12 @@ import matplotlib.pyplot as plt
 
 from datos import cargar_pacientes
 from metricas import Metricas
-from modelos import ModeloUmbral
+from modelos import ModeloRedNeuronal, ModeloUmbral
 
 CARPETA_PROCESADA = Path.cwd() / "data" / "processed"
 CARPETA_RESULTADOS = Path.cwd() / "resultados"
 PACIENTES = ["chb01", "chb03", "chb04", "chb05", "chb09", "chb10"]
-# Paciente que se deja fuera del entrenamiento para evaluar el modelo.
+# Paciente que se deja fuera del entrenamiento para evaluar los modelos.
 PACIENTE_PRUEBA = "chb10"
 
 
@@ -41,8 +41,8 @@ def graficar_roc(curvas: dict) -> None:
 
 
 def main() -> None:
-    """Entrena el modelo umbral y lo evalúa con un paciente no visto.
-    Indica las ventanas de posible crisis de ese paciente.
+    """Entrena ModeloUmbral y ModeloRedNeuronal, y los evalúa con un paciente
+    no visto. Indica las ventanas de posible crisis de ese paciente.
     """
 
     # Separa los pacientes en 5 de entrenamiento y 1 de prueba.
@@ -67,13 +67,14 @@ def main() -> None:
     )
     print(f"Prueba: {n_prueba} ventanas de {PACIENTE_PRUEBA} (no visto)")
 
-    # Modelos a entrenar y evaluar, cada uno con su nombre. Actualmente solo
-    # ModeloUmbral. En una futura iteración se agregará ModeloRedNeuronal
-    # cuando esté implementado.
-    modelos = [("Modelo umbral", ModeloUmbral())]
+    # Modelos a comparar.
+    modelos = [
+        ("Modelo umbral", ModeloUmbral()),
+        ("Red neuronal (MLP)", ModeloRedNeuronal()),
+    ]
 
     print()
-    print("== Evaluación del modelo (requiere las crisis anotadas) ==")
+    print("== Evaluación de los modelos (requiere las crisis anotadas) ==")
     curvas_roc = {}
     for nombre, modelo in modelos:
         if not modelo.entrenar(entrenamiento):
@@ -96,7 +97,7 @@ def main() -> None:
         curvas_roc[f"{nombre} (AUC = {auc:.3f})"] = metricas.curva_roc()
 
     # Lista de revisión: Ventanas del paciente de prueba ordenadas de mayor a
-    # menor puntaje, según el último modelo de la lista.
+    # menor puntaje, según el último modelo de la lista (la RN).
     modelo = modelos[-1][1]
     orden = modelo.priorizar(prueba.obtener_caracteristicas())
     print()
